@@ -5,3 +5,5 @@ boto3
 soundfile
 librosa
 scipy
+praat-textgrids
+unidecode
