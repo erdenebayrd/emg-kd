@@ -1,0 +1,7 @@
+emg_data/
+*.tar.gz
+*.npy
+*.pt
+checkpoints/
+teacher_logits/
+.env
