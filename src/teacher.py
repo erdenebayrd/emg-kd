@@ -1,4 +1,3 @@
-%%writefile /content/emg-kd/src/teacher.py
 import sys, torch
 from absl import flags
 
