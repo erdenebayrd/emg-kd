@@ -38,7 +38,7 @@ def train_student(student, kd_dataset, dev_dataset, chars, device,
                   ckpt_path=None):
     student.to(device)
     loader = DataLoader(kd_dataset, batch_size=batch_size, shuffle=True,
-                        collate_fn=kd_collate, num_workers=2)
+                        collate_fn=kd_collate, num_workers=4)
     opt = torch.optim.AdamW(student.parameters(), lr=lr)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
 
