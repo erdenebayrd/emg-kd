@@ -48,6 +48,12 @@ def train_student(student, kd_dataset, dev_dataset, chars, device,
         t0 = time.time()
         running = {"ctc": 0.0, "kd": 0.0}
         for step, (raw, t_logits, labels, rl, ll, yl) in enumerate(loader):
+            # alpha warmup: pure CTC for first 3 epochs, then ramp KD in
+            if ep < 3:
+                cur_alpha = 0.0
+            else:
+                cur_alpha = min(alpha, alpha * (ep - 2) / 3)
+        
             raw      = raw.to(device)
             t_logits = t_logits.to(device)
             labels   = labels.to(device)
@@ -62,7 +68,7 @@ def train_student(student, kd_dataset, dev_dataset, chars, device,
             ll = ll.clamp(max=Tmin)
 
             loss, parts = kd_ctc_loss(s_logits, t_logits, labels, ll, yl,
-                                      alpha=alpha, temperature=temperature)
+                                      alpha=cur_alpha, temperature=temperature)
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(student.parameters(), 5.0)
             opt.step()
@@ -70,8 +76,8 @@ def train_student(student, kd_dataset, dev_dataset, chars, device,
             running["ctc"] += parts["ctc"]; running["kd"] += parts["kd"]
             if (step + 1) % log_every == 0:
                 nb = step + 1
-                print(f"  ep{ep} step{step+1}  ctc {running['ctc']/nb:.3f}  "
-                      f"kd {running['kd']/nb:.3f}")
+                print(f"  ep{ep} step{step+1}  a{cur_alpha:.2f}  "
+                      f"ctc {running['ctc']/nb:.3f}  kd {running['kd']/nb:.3f}")
         sched.step()
 
         if (ep + 1) % eval_every == 0:
