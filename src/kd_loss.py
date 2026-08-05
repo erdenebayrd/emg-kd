@@ -5,7 +5,6 @@ import torch.nn.functional as F
 
 BLANK = 37
 
-
 def kd_ctc_loss(student_logits, teacher_logits, targets, in_lens, tgt_lens,
                 alpha=0.5, temperature=2.0, blank=BLANK,
                 mask_blank_dominant=True, blank_thresh=0.9):
