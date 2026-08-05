@@ -34,7 +34,8 @@ def evaluate_wer(model, dev_dataset, chars, device, blank=37, max_n=None):
 
 def train_student(student, kd_dataset, dev_dataset, chars, device,
                   epochs=10, batch_size=8, lr=3e-4,
-                  alpha=0.5, temperature=2.0, eval_every=1, log_every=100):
+                  alpha=0.5, temperature=2.0, eval_every=1, log_every=100,
+                  ckpt_path=None):
     student.to(device)
     loader = DataLoader(kd_dataset, batch_size=batch_size, shuffle=True,
                         collate_fn=kd_collate, num_workers=2)
@@ -76,8 +77,18 @@ def train_student(student, kd_dataset, dev_dataset, chars, device,
         if (ep + 1) % eval_every == 0:
             wer = evaluate_wer(student, dev_dataset, chars, device)
             mark = ""
+
             if wer < best_wer:
                 best_wer = wer; mark = "  <-- best"
+                if ckpt_path:
+                    save_ckpt(student, ckpt_path,
+                              {"epoch": ep, "wer": wer,
+                               "d_model": getattr(student, "_d_model", None)})
+
             print(f"epoch {ep} done in {time.time()-t0:.0f}s | "
                   f"dev WER {wer*100:.2f}%{mark}")
     return best_wer
+
+def save_ckpt(student, path, meta=None):
+    import torch
+    torch.save({"model": student.state_dict(), "meta": meta or {}}, path)
