@@ -29,12 +29,26 @@ class ResConvBlock(nn.Module):
 
 class Student(nn.Module):
     """Compact CTC recogniser. Input raw EMG (B, T, 8) -> logits (B, T/8, 38).
-    No session embedding (see thesis H1 methodology)."""
+    Fixed per-channel input normalization (padding-safe). No session embedding.
+
+    Pass emg_mean / emg_std (each shape (8,)) computed once over real data.
+    If not given, defaults to mean 0 / std 1 (no-op) — but you should pass them.
+    """
     def __init__(self, d_model=256, n_enc=4, n_down=3, in_ch=8,
-                 vocab=VOCAB, n_head=4, ff_mult=4, dropout=0.1):
+                 vocab=VOCAB, n_head=4, ff_mult=4, dropout=0.1,
+                 emg_mean=None, emg_std=None):
         super().__init__()
         assert n_down == 3, "keep 8x downsample for teacher-frame alignment in v1"
-        self.in_norm = nn.BatchNorm1d(in_ch)   # normalize the 8 EMG channels
+
+        # fixed input normalization constants (buffers: saved with the model,
+        # moved to device automatically, never updated by training)
+        if emg_mean is None:
+            emg_mean = torch.zeros(in_ch)
+        if emg_std is None:
+            emg_std = torch.ones(in_ch)
+        self.register_buffer("emg_mean", torch.as_tensor(emg_mean).float().view(1, in_ch, 1))
+        self.register_buffer("emg_std",  torch.as_tensor(emg_std).float().view(1, in_ch, 1))
+
         chans = [in_ch] + [d_model] * n_down
         self.conv = nn.Sequential(*[
             ResConvBlock(chans[i], chans[i + 1], stride=2) for i in range(n_down)])
@@ -46,12 +60,20 @@ class Student(nn.Module):
         self.downsample = 2 ** n_down
         self._d_model = d_model
 
-    def forward(self, x_raw):                 # (B, T, 8)
+    def forward(self, x_raw, in_lens=None):   # x_raw: (B, T, 8)
         x = x_raw.transpose(1, 2)             # (B, 8, T)
-        x = self.in_norm(x)                   # normalize channels
+        x = (x - self.emg_mean) / self.emg_std   # fixed normalization, padding-safe
         x = self.conv(x)                      # (B, d, T/8)
         x = x.transpose(1, 2)                 # (B, T/8, d)
-        x = self.encoder(x)
+
+        # padding mask for the transformer: True = ignore this frame
+        mask = None
+        if in_lens is not None:
+            Tp = x.shape[1]
+            ar = torch.arange(Tp, device=x.device)[None, :]      # (1, T/8)
+            mask = ar >= in_lens[:, None]                         # (B, T/8) True where padded
+
+        x = self.encoder(x, src_key_padding_mask=mask)
         return self.head(x)                   # (B, T/8, 38)
 
 

@@ -13,9 +13,9 @@ def evaluate_wer(model, dev_dataset, chars, device, blank=37, max_n=None):
     n = len(dev_dataset) if max_n is None else min(max_n, len(dev_dataset))
     for k in range(n):
         item = dev_dataset[k]
-        raw = item["raw_emg"].float().unsqueeze(0).to(device)
+        raw = item["raw_emg"].float().unsqueeze(0).to(device)     # (1, T, 8)
         with torch.no_grad():
-            lg = model(raw)                       # (1, T', 38)
+            lg = model(raw)                        # single utterance, no padding -> no mask needed
         ids = lg[0].argmax(-1).tolist()
         out, prev = [], None
         for i in ids:
@@ -73,7 +73,7 @@ def train_student(student, kd_dataset, dev_dataset, chars, device,
             labels   = labels.to(device)
             ll, yl   = ll.to(device), yl.to(device)
 
-            s_logits = student(raw)                     # (B, T', 38)
+            s_logits = student(raw, in_lens=ll)         # pass lengths -> padding mask
 
             # guard: trim to the shorter of student/teacher frame count per batch
             Tmin = min(s_logits.shape[1], t_logits.shape[1])
