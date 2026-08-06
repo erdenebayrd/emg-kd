@@ -6,9 +6,9 @@ from torch.nn.utils.rnn import pad_sequence
 
 class KDDataset(Dataset):
     """Serves (raw_emg, teacher_logits, label) per utterance.
-    raw_emg comes from Gaddy's EMGDataset (already preprocessed).
-    teacher_logits + labels come from the cached files, aligned by index."""
-    def __init__(self, emg_dataset, cache_dir, labels_path):
+    Skips utterances with empty labels (they poison CTC toward all-blank).
+    Logit files stay indexed by the ORIGINAL dataset index."""
+    def __init__(self, emg_dataset, cache_dir, labels_path, min_label_len=1):
         self.ds = emg_dataset
         self.cache_dir = cache_dir
         with open(labels_path, "rb") as f:
@@ -16,14 +16,21 @@ class KDDataset(Dataset):
         assert len(self.labels) == len(self.ds), \
             f"labels {len(self.labels)} != dataset {len(self.ds)}"
 
-    def __len__(self):
-        return len(self.ds)
+        # build list of valid original indices (label length >= min_label_len)
+        self.valid = [i for i in range(len(self.labels))
+                      if self.labels[i].shape[0] >= min_label_len]
+        n_dropped = len(self.labels) - len(self.valid)
+        print(f"KDDataset: {len(self.valid)} valid, {n_dropped} dropped (empty/short labels)")
 
-    def __getitem__(self, k):
-        raw = self.ds[k]["raw_emg"].float()               # (T, 8)
-        logits = np.load(f"{self.cache_dir}/{k}.npy")      # (T', 38) fp16
-        logits = torch.from_numpy(logits).float()          # -> fp32
-        label = torch.from_numpy(self.labels[k].astype(np.int64))  # (L,)
+    def __len__(self):
+        return len(self.valid)
+
+    def __getitem__(self, j):
+        k = self.valid[j]                                  # map to original index
+        raw = self.ds[k]["raw_emg"].float()                # (T, 8)
+        logits = np.load(f"{self.cache_dir}/{k}.npy")      # (T', 38) fp16, original index
+        logits = torch.from_numpy(logits).float()
+        label = torch.from_numpy(self.labels[k].astype(np.int64))
         return raw, logits, label
 
 
