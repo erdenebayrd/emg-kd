@@ -1,4 +1,4 @@
-# src/models.py
+# src/student.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -34,6 +34,7 @@ class Student(nn.Module):
                  vocab=VOCAB, n_head=4, ff_mult=4, dropout=0.1):
         super().__init__()
         assert n_down == 3, "keep 8x downsample for teacher-frame alignment in v1"
+        self.in_norm = nn.BatchNorm1d(in_ch)   # normalize the 8 EMG channels
         chans = [in_ch] + [d_model] * n_down
         self.conv = nn.Sequential(*[
             ResConvBlock(chans[i], chans[i + 1], stride=2) for i in range(n_down)])
@@ -43,9 +44,12 @@ class Student(nn.Module):
         self.encoder = nn.TransformerEncoder(enc, n_enc)
         self.head = nn.Linear(d_model, vocab)
         self.downsample = 2 ** n_down
+        self._d_model = d_model
 
     def forward(self, x_raw):                 # (B, T, 8)
-        x = self.conv(x_raw.transpose(1, 2))  # (B, d, T/8)
+        x = x_raw.transpose(1, 2)             # (B, 8, T)
+        x = self.in_norm(x)                   # normalize channels
+        x = self.conv(x)                      # (B, d, T/8)
         x = x.transpose(1, 2)                 # (B, T/8, d)
         x = self.encoder(x)
         return self.head(x)                   # (B, T/8, 38)
