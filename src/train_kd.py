@@ -1,5 +1,5 @@
 # src/train_kd.py
-import torch, time
+import torch, time, math
 from torch.utils.data import DataLoader
 from src.kd_data import kd_collate
 from src.kd_loss import kd_ctc_loss
@@ -32,15 +32,29 @@ def evaluate_wer(model, dev_dataset, chars, device, blank=37, max_n=None):
     return jiwer.wer(rc, pc)
 
 
+def save_ckpt(student, path, meta=None):
+    torch.save({"model": student.state_dict(), "meta": meta or {}}, path)
+
+
 def train_student(student, kd_dataset, dev_dataset, chars, device,
                   epochs=10, batch_size=8, lr=3e-4,
                   alpha=0.5, temperature=2.0, eval_every=1, log_every=100,
-                  ckpt_path=None):
+                  ckpt_path=None, ctc_warmup_epochs=3):
     student.to(device)
     loader = DataLoader(kd_dataset, batch_size=batch_size, shuffle=True,
-                        collate_fn=kd_collate, num_workers=4)
+                        collate_fn=kd_collate, num_workers=2)
     opt = torch.optim.AdamW(student.parameters(), lr=lr)
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
+
+    # ---- LR warmup (1 epoch ramp 0->1) then cosine decay ----
+    steps_per_epoch = len(loader)
+    warmup_steps = steps_per_epoch
+    total_steps  = steps_per_epoch * epochs
+    def lr_lambda(step):
+        if step < warmup_steps:
+            return (step + 1) / warmup_steps
+        prog = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        return 0.5 * (1 + math.cos(math.pi * prog))
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
 
     best_wer = 1.0
     for ep in range(epochs):
@@ -48,12 +62,12 @@ def train_student(student, kd_dataset, dev_dataset, chars, device,
         t0 = time.time()
         running = {"ctc": 0.0, "kd": 0.0}
         for step, (raw, t_logits, labels, rl, ll, yl) in enumerate(loader):
-            # alpha warmup: pure CTC for first 3 epochs, then ramp KD in
-            if ep < 3:
+            # alpha warmup: pure CTC for first ctc_warmup_epochs, then ramp KD in
+            if ep < ctc_warmup_epochs:
                 cur_alpha = 0.0
             else:
-                cur_alpha = min(alpha, alpha * (ep - 2) / 3)
-        
+                cur_alpha = min(alpha, alpha * (ep - (ctc_warmup_epochs - 1)) / 3)
+
             raw      = raw.to(device)
             t_logits = t_logits.to(device)
             labels   = labels.to(device)
@@ -72,29 +86,24 @@ def train_student(student, kd_dataset, dev_dataset, chars, device,
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(student.parameters(), 5.0)
             opt.step()
+            sched.step()                     # per-batch stepping for warmup
 
             running["ctc"] += parts["ctc"]; running["kd"] += parts["kd"]
             if (step + 1) % log_every == 0:
                 nb = step + 1
-                print(f"  ep{ep} step{step+1}  a{cur_alpha:.2f}  "
+                lr_now = sched.get_last_lr()[0]
+                print(f"  ep{ep} step{step+1}  a{cur_alpha:.2f}  lr{lr_now:.2e}  "
                       f"ctc {running['ctc']/nb:.3f}  kd {running['kd']/nb:.3f}")
-        sched.step()
 
         if (ep + 1) % eval_every == 0:
             wer = evaluate_wer(student, dev_dataset, chars, device)
             mark = ""
-
             if wer < best_wer:
                 best_wer = wer; mark = "  <-- best"
                 if ckpt_path:
                     save_ckpt(student, ckpt_path,
                               {"epoch": ep, "wer": wer,
                                "d_model": getattr(student, "_d_model", None)})
-
             print(f"epoch {ep} done in {time.time()-t0:.0f}s | "
                   f"dev WER {wer*100:.2f}%{mark}")
     return best_wer
-
-def save_ckpt(student, path, meta=None):
-    import torch
-    torch.save({"model": student.state_dict(), "meta": meta or {}}, path)
